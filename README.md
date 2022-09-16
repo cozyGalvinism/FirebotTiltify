@@ -9,7 +9,7 @@ At this point in time, there is a donation event and a reward filter, which allo
 
 ## How to install
 
-Download the current version of the script from the releases and put it in your `scripts` folder. In Firebot, open your settings, navigate to `Scripts` and press `Manage Startup Scripts`, then `Add New Script` and lastly select the Tiltify script. After that, restart Firebot.
+Download the current version of the script from [here](https://github.com/cozyGalvinism/FirebotTiltify/releases) and put it in your `scripts` folder. In Firebot, open your settings, navigate to `Scripts` and press `Manage Startup Scripts`, then `Add New Script` and lastly select the Tiltify script. After that, restart Firebot.
 
 After the restart, if you go into your settings again, on the `Integrations` page, there should now be the Tiltify integration. Press the `Link` button and follow the steps. After you're done, you will need to grab either your campaign ID or your campaign slug, although only the campaign ID has been tested. Once you have it, click `Configure` and put your campaign ID in the field.
 
