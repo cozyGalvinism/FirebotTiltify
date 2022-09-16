@@ -1,32 +1,26 @@
 import { Firebot } from "@crowbartools/firebot-custom-scripts-types";
+import { register } from "./tiltify";
 
-interface Params {
-  message: string;
-}
+interface Params {};
 
 const script: Firebot.CustomScript<Params> = {
   getScriptManifest: () => {
     return {
-      name: "Starter Custom Script",
-      description: "A starter custom script for build",
-      author: "SomeDev",
+      name: "Tiltify Integration",
+      description: "A Tiltify integration for Firebot",
+      author: "cozyGalvinism",
       version: "1.0",
       firebotVersion: "5",
+      startupOnly: true
     };
   },
   getDefaultParameters: () => {
-    return {
-      message: {
-        type: "string",
-        default: "Hello World!",
-        description: "Message",
-        secondaryDescription: "Enter a message here",
-      },
-    };
+    return {};
   },
   run: (runRequest) => {
     const { logger } = runRequest.modules;
-    logger.info(runRequest.parameters.message);
+    logger.info("Registering Tiltify integration.");
+    register(runRequest);
   },
 };
 
