@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import axios from "axios";
 import { RunRequest } from '@crowbartools/firebot-custom-scripts-types';
 import { Logger } from '@crowbartools/firebot-custom-scripts-types/types/modules/logger';
+import { Effects } from '@crowbartools/firebot-custom-scripts-types/types/effects';
 
 let eventManager: EventManager;
 let db: any;
@@ -163,11 +164,12 @@ class TiltifyIntegration extends EventEmitter implements IntegrationController {
                 
                 lastId = donation.id;
 
+                logger.info(`Donation from ${donation.name} for $${donation.amount}. Reward: ${donation.rewardId}`);
                 eventManager.triggerEvent(EVENT_SOURCE_ID, EventId.DONATION, {
                     from: donation.name,
                     donationAmount: donation.amount,
                     rewardId: donation.rewardId,
-                }, true);
+                }, false);
 
                 ids.push(donation.id);
                 db.push(`/tiltify/${campaignId}/ids`, ids);
@@ -282,6 +284,61 @@ function register(runRequest: RunRequest) {
     runRequest.modules.eventManager.registerEventSource(eventSourceDefinition);
     runRequest.modules.eventFilterManager.registerFilter(RewardFilter);
     runRequest.modules.frontendCommunicator.fireEventAsync("integrationsUpdated", {});
+
+    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationFrom',
+            description: 'The name of who sent a Tiltify donation',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["text"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const from = (trigger.metadata.eventData && trigger.metadata.eventData.from) || "Unknown User";
+
+            return from;
+        }
+    });
+    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationAmount',
+            description: 'The amount of a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const donationAmount = (trigger.metadata.eventData && trigger.metadata.eventData.donationAmount) || 0;
+
+            return donationAmount;
+        }
+    });
+    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationRewardId',
+            description: 'The reward ID of a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const rewardId = (trigger.metadata.eventData && trigger.metadata.eventData.rewardId) || -1;
+
+            return rewardId;
+        }
+    });
 
     runRequest.modules.frontendCommunicator.onAsync("get-tiltify-rewards", () => {
         let integration = runRequest.modules.integrationManager.getIntegrationDefinitionById("tiltify");
