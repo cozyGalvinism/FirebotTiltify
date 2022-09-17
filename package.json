@@ -1,7 +1,7 @@
 {
   "name": "firebot-tiltify",
   "scriptOutputName": "firebot-tiltify",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A Tiltify integration for Firebot",
   "main": "",
   "scripts": {
