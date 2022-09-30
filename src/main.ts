@@ -9,7 +9,7 @@ const script: Firebot.CustomScript<Params> = {
       name: "Tiltify Integration",
       description: "A Tiltify integration for Firebot",
       author: "cozyGalvinism",
-      version: "1.0.2",
+      version: "1.0.3",
       firebotVersion: "5",
       startupOnly: true
     };

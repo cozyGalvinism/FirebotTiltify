@@ -6,6 +6,7 @@ import axios from "axios";
 import { RunRequest } from '@crowbartools/firebot-custom-scripts-types';
 import { Logger } from '@crowbartools/firebot-custom-scripts-types/types/modules/logger';
 import { Effects } from '@crowbartools/firebot-custom-scripts-types/types/effects';
+import { ReplaceVariableManager } from '@crowbartools/firebot-custom-scripts-types/types/modules/replace-variable-manager';
 
 let eventManager: EventManager;
 let db: any;
@@ -31,6 +32,19 @@ const eventSourceDefinition: EventSource = {
                 from: "Tiltify",
                 donationAmount: 4.2,
                 rewardId: null,
+                comment: "Thanks for the stream!",
+                pollOptionId: null,
+                challengeId: null,
+                campaignInfo: {
+                    name: "My Campaign",
+                    cause: "Save the Children",
+                    causeLegalName: "Save the Children Inc",
+                    fundraisingGoal: 1000,
+                    originalGoal: 500,
+                    supportingRaised: 500,
+                    amountRaised: 1000,
+                    totalRaised: 1500,
+                }
             },
         }
     ]
@@ -81,6 +95,27 @@ const integrationDefinition: IntegrationDefinition = {
     }
 };
 
+type TiltifyCampaign = {
+    data: {
+        id: number;
+        name: string;
+        causeId: number;
+        fundraiserGoalAmount: number;
+        originalFundraiserGoal: number;
+        amountRaised: number;
+        supportingAmountRaised: number;
+        totalAmountRaised: number;
+    }
+};
+
+type TiltifyCause = {
+    data: {
+        id: number;
+        name: string;
+        legalName: string;
+    }
+};
+
 class TiltifyIntegration extends EventEmitter implements IntegrationController {
     timeout: NodeJS.Timeout;
     connected: boolean;
@@ -105,17 +140,34 @@ class TiltifyIntegration extends EventEmitter implements IntegrationController {
         }
 
         if (integrationData.userSettings == null || integrationData.userSettings.campaignSettings == null) {
-            this.emit("connected", integrationDefinition.id);
-            this.connected = true;
+            this.emit("disconnected", integrationDefinition.id);
+            this.connected = false;
             return;
         }
 
         const { campaignId } = integrationData.userSettings.campaignSettings;
         if (campaignId == null || campaignId === "") {
-            this.emit("connected", integrationDefinition.id);
-            this.connected = true;
+            this.emit("disconnected", integrationDefinition.id);
+            this.connected = false;
             return;
         }
+
+        let campaignInfo: TiltifyCampaign = null;
+        let causeInfo: TiltifyCause = null;
+        (async function getCampaignInfo() {
+            var response = await axios.get(TILTIFY_BASE_URL + "campaigns/" + campaignId, {
+                headers: {
+                    Authorization: "Bearer " + accountId
+                }
+            });
+            campaignInfo = response.data as TiltifyCampaign;
+            var response = await axios.get(TILTIFY_BASE_URL + "causes/" + campaignInfo.data.causeId, {
+                headers: {
+                    Authorization: "Bearer " + accountId
+                }
+            });
+            causeInfo = response.data as TiltifyCause;
+        })();
 
         this.timeout = setInterval(async () => {
             var lastId: number;
@@ -154,10 +206,9 @@ class TiltifyIntegration extends EventEmitter implements IntegrationController {
             }
 
             const { data } = response;
-            // sort by ascending completedAt
-            var reversed = data.data.sort((a: any, b: any) => a.completedAt - b.completedAt);
+            var sortedDonations = data.data.sort((a: any, b: any) => a.completedAt - b.completedAt);
 
-            reversed.forEach((donation: { id: number; amount: number; name: string; comment: string; completedAt: number; rewardId?: number; }) => {
+            sortedDonations.forEach((donation: { id: number; amount: number; name: string; comment: string; completedAt: number; rewardId?: number; pollOptionId?: number; challengeId?: number; }) => {
                 if (db.getData(`/tiltify/${campaignId}/ids`).includes(donation.id)) {
                     return;
                 }
@@ -169,6 +220,19 @@ class TiltifyIntegration extends EventEmitter implements IntegrationController {
                     from: donation.name,
                     donationAmount: donation.amount,
                     rewardId: donation.rewardId,
+                    comment: donation.comment,
+                    pollOptionId: donation.pollOptionId,
+                    challengeId: donation.challengeId,
+                    campaignInfo: {
+                        name: campaignInfo.data.name,
+                        cause: causeInfo.data.name,
+                        causeLegalName: causeInfo.data.legalName,
+                        fundraisingGoal: campaignInfo.data.fundraiserGoalAmount,
+                        originalGoal: campaignInfo.data.originalFundraiserGoal,
+                        supportingRaised: campaignInfo.data.supportingAmountRaised,
+                        amountRaised: campaignInfo.data.amountRaised,
+                        totalRaised: campaignInfo.data.totalAmountRaised,
+                    }
                 }, false);
 
                 ids.push(donation.id);
@@ -208,6 +272,34 @@ const integration: Integration = {
 async function fetchRewards(accountId: string, campaignId: string) {
     try {
         const response = await axios.get(TILTIFY_BASE_URL + "campaigns/" + campaignId + "/rewards", {
+            headers: {
+                Authorization: "Bearer " + accountId,
+            }
+        });
+        return response.data.data;
+    } catch (e) {
+        console.log(e);
+        return [];
+    }
+}
+
+async function fetchPollOptions(accountId: string, campaignId: string) {
+    try {
+        const response = await axios.get(TILTIFY_BASE_URL + "campaigns/" + campaignId + "/polls", {
+            headers: {
+                Authorization: "Bearer " + accountId,
+            }
+        });
+        return response.data.data.reduce((acc: any[], poll: any) => acc.concat(poll.options), []);
+    } catch (e) {
+        console.log(e);
+        return [];
+    }
+}
+
+async function fetchChallenges(accountId: string, campaignId: string) {
+    try {
+        const response = await axios.get(TILTIFY_BASE_URL + "campaigns/" + campaignId + "/challenges", {
             headers: {
                 Authorization: "Bearer " + accountId,
             }
@@ -274,18 +366,76 @@ const RewardFilter: EventFilter = {
     },
 };
 
-function register(runRequest: RunRequest) {
-    let JsonDb: any = runRequest.modules.JsonDb;
-    eventManager = runRequest.modules.eventManager;
-    db = new JsonDb("tiltify.json", true, false, "/");
-    logger = runRequest.modules.logger;
+const PollOptionFilter: EventFilter = {
+    id: "tcu:poll-option-id",
+    name: "Tiltify Poll Option",
+    description: "Filter by the Tiltify poll option.",
+    events: [
+        { eventSourceId: EVENT_SOURCE_ID, eventId: EventId.DONATION },
+    ],
+    comparisonTypes: [
+        "is",
+        "is not"
+    ],
+    valueType: "preset",
+    predicate: (filterSettings, eventData) => {
+        const pollOptionId = eventData.eventMeta.pollOptionId;
+        
+        switch (filterSettings.comparisonType) {
+            case "is": {
+                return Promise.resolve(pollOptionId == filterSettings.value);
+            }
+            case "is not": {
+                return Promise.resolve(pollOptionId != filterSettings.value);
+            }
+            default: {
+                return Promise.resolve(false);
+            }
+        }
+    },
+    presetValues: (backendCommunicator) => {
+        return backendCommunicator.fireEventAsync("get-tiltify-poll-options").then((pollOptions: any) => {
+            return pollOptions.map((r: any) => ({value: r.id, display: r.name}));
+        });
+    },
+};
 
-    runRequest.modules.integrationManager.registerIntegration(integration);
-    runRequest.modules.eventManager.registerEventSource(eventSourceDefinition);
-    runRequest.modules.eventFilterManager.registerFilter(RewardFilter);
-    runRequest.modules.frontendCommunicator.fireEventAsync("integrationsUpdated", {});
+const ChallengeFilter: EventFilter = {
+    id: "tcu:challenge-id",
+    name: "Tiltify Challenge",
+    description: "Filter by the Tiltify challenge.",
+    events: [
+        { eventSourceId: EVENT_SOURCE_ID, eventId: EventId.DONATION },
+    ],
+    comparisonTypes: [
+        "is",
+        "is not"
+    ],
+    valueType: "preset",
+    predicate: (filterSettings, eventData) => {
+        const challengeId = eventData.eventMeta.challengeId;
+        
+        switch (filterSettings.comparisonType) {
+            case "is": {
+                return Promise.resolve(challengeId == filterSettings.value);
+            }
+            case "is not": {
+                return Promise.resolve(challengeId != filterSettings.value);
+            }
+            default: {
+                return Promise.resolve(false);
+            }
+        }
+    },
+    presetValues: (backendCommunicator) => {
+        return backendCommunicator.fireEventAsync("get-tiltify-challenges").then((challenges: any) => {
+            return challenges.map((r: any) => ({value: r.id, display: r.name}));
+        });
+    },
+};
 
-    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+function registerReplaceVariables(manager: ReplaceVariableManager) {
+    manager.registerReplaceVariable({
         definition: {
             handle: 'tiltifyDonationFrom',
             description: 'The name of who sent a Tiltify donation',
@@ -303,7 +453,7 @@ function register(runRequest: RunRequest) {
             return from;
         }
     });
-    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+    manager.registerReplaceVariable({
         definition: {
             handle: 'tiltifyDonationAmount',
             description: 'The amount of a donation from Tiltify',
@@ -321,7 +471,7 @@ function register(runRequest: RunRequest) {
             return donationAmount;
         }
     });
-    runRequest.modules.replaceVariableManager.registerReplaceVariable({
+    manager.registerReplaceVariable({
         definition: {
             handle: 'tiltifyDonationRewardId',
             description: 'The reward ID of a donation from Tiltify',
@@ -339,6 +489,184 @@ function register(runRequest: RunRequest) {
             return rewardId;
         }
     });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationComment',
+            description: 'The comment of a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["text"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const comment = (trigger.metadata.eventData && trigger.metadata.eventData.comment) || "";
+
+            return comment;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignName',
+            description: 'The name of the campaign that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["text"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignName = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).name) || "";
+
+            return campaignName;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignCause',
+            description: 'The cause of the campaign that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["text"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignCause = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).cause) || "";
+
+            return campaignCause;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaigCauseLegal',
+            description: 'The legal cause name of the campaign that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["text"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignCauseLegal = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).causeLegalName) || "";
+
+            return campaignCauseLegal;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignFundraisingGoal',
+            description: 'The fundraising goal of the cause that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignFundraisingGoal = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).fundraisingGoal) || 0;
+
+            return campaignFundraisingGoal;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignOriginalGoal',
+            description: 'The original goal set by the fundraiser of the campaign that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignOriginalGoal = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).originalGoal) || 0;
+
+            return campaignOriginalGoal;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignSupportingRaised',
+            description: 'The amount of money raised by supporting campaigns that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignSupportingRaised = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).supportingRaised) || 0;
+
+            return campaignSupportingRaised;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignRaised',
+            description: 'The amount of money raised by the campaign that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignRaised = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).amountRaised) || 0;
+
+            return campaignRaised;
+        }
+    });
+    manager.registerReplaceVariable({
+        definition: {
+            handle: 'tiltifyDonationCampaignTotalRaised',
+            description: 'The total amount of money raised by the cause that received a donation from Tiltify',
+            triggers: {
+                "event": [
+                    "tiltify:donation"
+                ],
+                "manual": true
+            },
+            possibleDataOutput: ["number"]
+        },
+        evaluator: function (trigger: Effects.Trigger, ...args: any[]) {
+            const campaignTotalRaised = (trigger.metadata.eventData && (trigger.metadata.eventData.campaignInfo as any).totalRaised) || 0;
+
+            return campaignTotalRaised;
+        }
+    });
+}
+
+function register(runRequest: RunRequest) {
+    let JsonDb: any = runRequest.modules.JsonDb;
+    eventManager = runRequest.modules.eventManager;
+    db = new JsonDb("tiltify.json", true, false, "/");
+    logger = runRequest.modules.logger;
+
+    runRequest.modules.integrationManager.registerIntegration(integration);
+    runRequest.modules.eventManager.registerEventSource(eventSourceDefinition);
+    runRequest.modules.eventFilterManager.registerFilter(RewardFilter);
+    runRequest.modules.eventFilterManager.registerFilter(PollOptionFilter);
+    runRequest.modules.eventFilterManager.registerFilter(ChallengeFilter);
+    runRequest.modules.frontendCommunicator.fireEventAsync("integrationsUpdated", {});
+
+    registerReplaceVariables(runRequest.modules.replaceVariableManager);
 
     runRequest.modules.frontendCommunicator.onAsync("get-tiltify-rewards", () => {
         let integration = runRequest.modules.integrationManager.getIntegrationDefinitionById("tiltify");
@@ -349,6 +677,28 @@ function register(runRequest: RunRequest) {
         let campaignId = integration.userSettings.campaignSettings.campaignId;
 
         return fetchRewards(accountId, campaignId);
+    });
+
+    runRequest.modules.frontendCommunicator.onAsync("get-tiltify-poll-options", () => {
+        let integration = runRequest.modules.integrationManager.getIntegrationDefinitionById("tiltify");
+        if (integration == null || integration.userSettings == null || integration.userSettings.campaignSettings == null || integration.userSettings.campaignSettings.campaignId == null || integration.userSettings.campaignSettings.campaignId === "") {
+            return Promise.reject("Tiltify integration not found or not configured");
+        }
+        let accountId = integration.accountId;
+        let campaignId = integration.userSettings.campaignSettings.campaignId;
+
+        return fetchPollOptions(accountId, campaignId);
+    });
+
+    runRequest.modules.frontendCommunicator.onAsync("get-tiltify-challenges", () => {
+        let integration = runRequest.modules.integrationManager.getIntegrationDefinitionById("tiltify");
+        if (integration == null || integration.userSettings == null || integration.userSettings.campaignSettings == null || integration.userSettings.campaignSettings.campaignId == null || integration.userSettings.campaignSettings.campaignId === "") {
+            return Promise.reject("Tiltify integration not found or not configured");
+        }
+        let accountId = integration.accountId;
+        let campaignId = integration.userSettings.campaignSettings.campaignId;
+
+        return fetchChallenges(accountId, campaignId);
     });
 
     // TODO: This isn't implemented in the UI yet, as I don't know how to do it.
