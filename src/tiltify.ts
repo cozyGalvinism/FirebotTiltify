@@ -46,6 +46,14 @@ const eventSourceDefinition: EventSource = {
                     totalRaised: 1500,
                 }
             },
+            isIntegration: true,
+            queued: true,
+            activityFeed: {
+                icon: "fad fa-heart",
+                getMessage: (eventData: any) => {
+                    return `**${eventData.from}** donated **$${eventData.donationAmount}** to Tiltify${eventData.rewardId && eventData.rewardId != -1 ? ` with reward *${eventData.rewardId}*` : ''}`;
+                }
+            }
         }
     ]
 };
